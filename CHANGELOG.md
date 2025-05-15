@@ -1,6 +1,25 @@
 # CHANGELOG
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.9.6] - 2025-05-14
+- bumped python version for CI job
+
+## [1.9.5] - 2025-05-14
+- removed unwanted modules in requirements.txt
+
+## [1.9.4] - 2024-10-29
+- adding default value of status variable
+
+## [1.9.3] - 2024-08-30
+- removed errcode check for diff
+
+## [1.9.2] - 2024-08-24
+- fixed compare_dump to conditionally compare commit dump sections
+
+## [1.9.1] - 2024-08-20
+- fixed compare_dump functions to take care of missing entries in dumps
+
 ## [1.9.0] - 2024-07-10
 - added --comparestartpc to river_core compile api
 - added river_core comparison command to perform log comparisons without compilation

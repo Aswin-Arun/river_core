@@ -60,75 +60,103 @@ def compare_dumps(file1, file2, start_hex=''):
     if start_hex == '':
         cmd = f'diff -iw {file1} {file2}'
     else:
-        cmd = f"diff -iw <(sed -n '/{start_hex}/,$p' {file1}) <(sed -n '/{start_hex}/,$p' {file2})"
+        trim_cmd = "sed -n \'/{start_hex} (/,$p\' {file}"
+
+        file1_trimmed = file1 + '_trimmed'
+        file2_trimmed = file2 + '_trimmed'
+
+        cmd1 = trim_cmd.format(start_hex = start_hex, file=file1)
+        code = sys_command_file(cmd1, filename=file1_trimmed)
+        if code[0]:    
+            assert False, f"{cmd1} has failed with code {code}"
+
+        cmd2 = trim_cmd.format(start_hex = start_hex, file=file2)
+        code = sys_command_file(cmd2, filename=file2_trimmed)
+        if code[0]:
+            assert False, f"{cmd2} has failed with code {code}"
+        
+        cmd = f'diff -iw {file1_trimmed} {file2_trimmed}'
+
     errcode, rout, rerr = sys_command(cmd, logging=False)
 
-    if errcode != 0 and rout!='':
-
+    status = 'Passed'
+    if errcode != 0 and rout != '':
+        logger.warning(f"Possible Differences found in {file1} and {file2}")
         rout += '\nMismatch infos:'
-
-        # initial status
-        status = 'Passed'
-
-        # get lines that start with < or >
         mismatch_str_lst = list(filter(lambda x: x[0] in ['<', '>'], rout.split('\n')))
-
-        # for each mismatched strings
         start_val = -1
+        flag_found_corr_file1 = False
         for i in range(len(mismatch_str_lst)):
-            
             file1_str = mismatch_str_lst[i]
             if file1_str[0] != '<':
                 continue
-            
+            else:
+                flag_found_corr_file1 = True
+
+            try:
+                file1_dat = dump_regex.findall(file1_str)[0]
+                logger.debug(f"-- Processing line from {os.path.basename(file1)}: {file1_dat}")
+            except IndexError:
+                status = 'Failed'
+                logger.debug(f"-- Failed to parse line from {os.path.basename(file1)}: {file1_str}")
+                break
+
+            flag_found_corr_file2 = False
             for j in range(start_val + 1, len(mismatch_str_lst)):
-                
-                file2_str = mismatch_str_lst[j] 
+                file2_str = mismatch_str_lst[j]
                 if file2_str[0] != '>':
                     continue
                 else:
+                    flag_found_corr_file2 = True
                     start_val = j
 
-                # get regex strings
                 try:
-                    file1_dat = dump_regex.findall(file1_str)[0]
                     file2_dat = dump_regex.findall(file2_str)[0]
+                    logger.debug(f"-- Processing line from {os.path.basename(file2)}: {file2_dat}")
                 except IndexError:
                     status = 'Failed'
+                    logger.debug(f"-- Failed to parse line from {os.path.basename(file2)}: {file2_str}")
                     break
-
-                # ensure commit message exists in same line number else fail
-                # if any of coreid, priv, pc or instr encoding fails, the diff has failed
-                if file1_dat[0:3] != file2_dat[0:3]:
-                    rout = rout + f'\nBM: {file1} at PC: {file1_dat[2]} and {file2} at PC: {file2_dat[2]}'
+                logger.debug(f"-- Comparing {os.path.basename(file1)}:{file1_dat[0]} {file1_dat[1]} {file1_dat[2]} {file1_dat[3]} vs "
+                             f"{os.path.basename(file2)}:{file2_dat[0]} {file2_dat[1]} {file2_dat[2]} {file2_dat[3]}")
+                
+                if file1_dat[0:4] != file2_dat[0:4]:
+                    rout += f'\nBM: {file1} at PC: {file1_dat[2]} and {file2} at PC: {file2_dat[2]}'
                     status = 'Failed'
+                    logger.debug(f"-- Mismatch in coreid, priv, pc or instruction between {file1} and {file2}")
                 else:
-
-                    # some cleanup
-                    change1 = file1_dat[-1].split() 
-
-                    # if odd number, it's a store
+                    change1 = file1_dat[-1].split()
                     if len(change1) % 2:
                         change1.remove('mem')
 
-                    # check if the architectural change is the same
                     file1dat_iter = iter(change1)
                     file2dat_iter = iter(file2_dat[-1].split())
-
                     file1_change = dict(zip(file1dat_iter, file1dat_iter))
                     file2_change = dict(zip(file2dat_iter, file2dat_iter))
 
                     if file1_change != file2_change:
-                        rout = rout + f'\nSM: at PC: {file1_dat[2]}'
+                        rout += f'\nSM: at PC: {file1_dat[2]}'
                         status = 'Failed'
+                        logger.debug(f"-- Mismatch in architectural change at PC: {file1_dat[2]}")
+                    
+                    rout += f'\nBM: Strings Match at PC: {file1_dat[2]}'
+
                 break
-    else:
-        status = 'Passed'
+
+            if not flag_found_corr_file2:
+                status = 'Failed'
+                rout += f'\nBM: {file1} at PC: {file1_dat[2]} and missing in {file2}'
+                logger.debug(f"-- Missing corresponding entry in {file2} for PC: {file1_dat[2]}")
+
+        if not flag_found_corr_file1:
+            status = 'Failed'
+            rout += f'\nBM: Missing entry in {file1}'
+            logger.debug(f"-- Missing corresponding entry in {file1}")
     
     # get number of instructions executed
     with open(f'{file1}','r') as fd:
       rcount = len(fd.readlines())
-
+    
     return status, rout, rcount
 
 
@@ -447,22 +475,20 @@ def sys_command_file(command, filename, timeout=500):
         :rtype: list
 
     '''
-    cmd = command.split(' ')
-    cmd = [x.strip(' ') for x in cmd]
-    cmd = [i for i in cmd if i]
-    logger.warning('$ {0} > {1}'.format(' '.join(cmd), filename))
-    fp = open(filename, 'w')
-    x = subprocess.Popen(cmd, stdout=fp, stderr=fp)
-    timer = Timer(timeout, x.kill)
-    try:
-        timer.start()
-        stdout, stderr = x.communicate()
-    finally:
-        timer.cancel()
+    cmd = shlex.split(command)
+    
+    logger.debug('$ {0} > {1}'.format(' '.join(cmd), filename))
+    
+    with open(filename, 'w') as fp:
+        with subprocess.Popen(cmd, stdout=fp, stderr=fp) as process:
+            timer = Timer(timeout, process.kill)
+            try:
+                timer.start()
+                stdout, stderr = process.communicate()
+            finally:
+                timer.cancel()
 
-    fp.close()
-
-    return (x.returncode, None, None)
+    return (process.returncode, None, None)
 
 
 class makeUtil():
